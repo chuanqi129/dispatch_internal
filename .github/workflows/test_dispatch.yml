@@ -1,0 +1,37 @@
+name: test_dispatch
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - converted_to_draft
+      - ready_for_review
+      - labeled
+    branches:
+      - main
+  repository_dispatch:
+    types: [my-event]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.client_payload.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test_dispatch:
+    name: test_dispatch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hello world
+        run: |
+          echo "Hello world"
+      - name: List ref to the PyTorch branch
+        id: list-ref
+        if: ${{ github.event_name == 'repository_dispatch' }}
+        run: |
+          echo "ref=${{ github.event.client_payload.ref }}" >> $GITHUB_OUTPUT
+          echo "sha=${{ github.event.client_payload.sha }}" >> $GITHUB_OUTPUT
