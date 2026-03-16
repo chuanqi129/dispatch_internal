@@ -29,9 +29,72 @@ jobs:
       - name: Hello world
         run: |
           echo "Hello world"
-      - name: List ref to the PyTorch branch
-        id: list-ref
+      - name: List repo to the PyTorch branch
+        id: list-repo
         if: ${{ github.event_name == 'repository_dispatch' }}
         run: |
-          echo "ref=${{ github.event.client_payload.ref }}" >> $GITHUB_OUTPUT
+          echo "repo=${{ github.event.client_payload.repo }}" >> $GITHUB_OUTPUT
           echo "sha=${{ github.event.client_payload.sha }}" >> $GITHUB_OUTPUT
+      - name: Set pending status on Repo A
+        if: ${{ github.event_name == 'repository_dispatch' }}
+        run: |
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.DISPATCH_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.event.client_payload.repo }}/statuses/${{ github.event.client_payload.sha }}" \
+            -d '{
+              "state": "pending",
+              "target_url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "description": "Repo ${{ github.repository }} tests running...",
+              "context": "${{ github.repository }} / test_dispatch"
+            }'
+      - name: Run tests
+        id: tests
+        run: |
+          # Simulate test execution with sleep, if the runid is even number, the test will pass, otherwise fail
+          sleep 60
+          if [ $(( ${{ github.run_id }} % 2 )) -eq 0 ]; then
+            echo "Tests passed"
+          else
+            echo "Tests failed"
+            exit 1
+          fi
+      - name: Set final status on Repo A
+        if: ${{ always() && github.event_name == 'repository_dispatch' }}
+        run: |
+          if [ "${{ steps.tests.outcome }}" == "success" ]; then
+            STATE="success"
+            DESC="Repo ${{ github.repository }} tests passed"
+          else
+            STATE="failure"
+            DESC="Repo ${{ github.repository }} tests failed"
+          fi
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: token ${{ secrets.DISPATCH_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.event.client_payload.repo }}/statuses/${{ github.event.client_payload.sha }}" \
+            -d "{
+              \"state\": \"$STATE\",
+              \"target_url\": \"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\",
+              \"description\": \"$DESC\",
+              \"context\": \"${{ github.repository }} / test_dispatch\"
+            }")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          echo "Response body: $BODY"
+          echo "HTTP status code: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::warning::Failed to set status '$STATE' (HTTP $HTTP_CODE), retrying with 'failure'..."
+            curl -s -X POST \
+              -H "Authorization: token ${{ secrets.DISPATCH_TOKEN }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.event.client_payload.repo }}/statuses/${{ github.event.client_payload.sha }}" \
+              -d "{
+                \"state\": \"failure\",
+                \"target_url\": \"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\",
+                \"description\": \"Failed to report status\",
+                \"context\": \"${{ github.repository }} / test_dispatch\"
+              }"
+          fi
